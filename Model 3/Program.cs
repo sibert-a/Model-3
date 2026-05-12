@@ -26,15 +26,16 @@ namespace DynamicModelingLab3
         private const double Dmin = 2;           // мин. задержка (всех звеньев)
         private const double Davg = 10;          // средняя задержка
         private const double Dmax = 18;          // макс. задержка
+        private const double Dstorage = 10;      // задержка склада (аналог Dij)
 
         private const double DeltaMuDop = 0.02;  // доп. отклонение μ
         private const double AlphaBase = 50.0;   // α = 50 * Δμ
 
         private const double ReplenishThreshold = 0.2;   // 20% от начального
         private const double StopThreshold = 0.05;       // 5% от начального
-        private const double ReplenishAmount = 200;      // мгновенное пополнение
+        private const double ReplenishPercent = 0.5;     // 50% от начального запаса (пополнение)
 
-        private const double DesiredInputRate = 10.0;    // желаемый темп со склада в линию
+        private const double Smoothing = 0.2;            // сглаживание для Dij
 
         private const double DeltaT = 1.0;               // шаг
         private const double Tmax = 100.0;               // время моделирования
@@ -107,9 +108,14 @@ namespace DynamicModelingLab3
             Z = 0;
             Xsb = 0;
 
-            X10 = X20 = DesiredInputRate;      // начальный темп со склада
-            X11 = X12 = X13 = DesiredInputRate;
-            X21 = X22 = DesiredInputRate;
+            // Начальные темпы (пересчитаются на первом шаге через UpdateFlowRates)
+            X10 = y0A / Dstorage;
+            X20 = y0B / Dstorage;
+            X11 = y11 / D11;
+            X12 = y12 / D12;
+            X13 = y13 / D13;
+            X21 = y21 / D21;
+            X22 = y22 / D22;
 
             lineAStopped = false;
             lineBStopped = false;
@@ -130,44 +136,41 @@ namespace DynamicModelingLab3
             Xsb = (muA >= 1.0 && muB >= 1.0) ? 1.0 / DeltaT : 0.0;
         }
 
-        // Расчёт задержек Dij по формуле (6) с α = AlphaBase * Δμ
+        // Расчёт задержек Dij по сглаженной формуле с управлением α
         private void UpdateDelays()
         {
             var (muA, muB) = ComputeMu();
             double deltaMu = muA - muB;
-
-            // Если линии остановлены – не меняем задержки
-            if (lineAStopped && lineBStopped) return;
-
-            double alpha = AlphaBase * deltaMu;   // может быть отрицательным
-            // Ограничим α, чтобы изменения не выходили за пределы Dmin/Dmax слишком резко
+            double alpha = AlphaBase * deltaMu;
             alpha = Math.Clamp(alpha, -Dmax * 0.5, Dmax * 0.5);
 
-            // Для линии А (3 звена)
-            if (!lineAStopped)
+            // Функция обновления одной задержки
+            double ComputeNewDelay(double oldD, double y, double sign)
             {
-                D11 = Dmin + Davg * (y11 / D11) + alpha;
-                D12 = Dmin + Davg * (y12 / D12) + alpha;
-                D13 = Dmin + Davg * (y13 / D13) + alpha;
-                // Ограничение и защита от деления на ноль
-                D11 = Math.Clamp(D11, Dmin, Dmax);
-                D12 = Math.Clamp(D12, Dmin, Dmax);
-                D13 = Math.Clamp(D13, Dmin, Dmax);
+                // Целевая задержка от текущего уровня (без скачков)
+                double target = Dmin + Davg * (y / oldD);
+                target = Math.Clamp(target, Dmin, Dmax);
+                // Сглаженное изменение + управляющее воздействие
+                double newD = oldD + Smoothing * (target - oldD) + sign * alpha;
+                return Math.Clamp(newD, Dmin, Dmax);
             }
 
-            // Для линии В (2 звена) – знак α противоположный (ускорение/замедление)
+            if (!lineAStopped)
+            {
+                D11 = ComputeNewDelay(D11, y11, +1);
+                D12 = ComputeNewDelay(D12, y12, +1);
+                D13 = ComputeNewDelay(D13, y13, +1);
+            }
             if (!lineBStopped)
             {
-                // При deltaMu>0 (А переполнена) – линию В нужно ускорить => уменьшить D (знак минус)
-                double alphaB = (deltaMu > 0) ? -alpha : alpha;
-                D21 = Dmin + Davg * (y21 / D21) + alphaB;
-                D22 = Dmin + Davg * (y22 / D22) + alphaB;
-                D21 = Math.Clamp(D21, Dmin, Dmax);
-                D22 = Math.Clamp(D22, Dmin, Dmax);
+                // При deltaMu>0 (профицит А) линию В нужно ускорить (знак минус)
+                double signB = (deltaMu > 0) ? -1 : +1;
+                D21 = ComputeNewDelay(D21, y21, signB);
+                D22 = ComputeNewDelay(D22, y22, signB);
             }
         }
 
-        // Расчёт темпов Xij = yij / Dij
+        // Расчёт темпов Xij = yij / Dij, X10, X20 через задержку склада
         private void UpdateFlowRates()
         {
             if (!lineAStopped)
@@ -175,9 +178,10 @@ namespace DynamicModelingLab3
                 X11 = y11 / D11;
                 X12 = y12 / D12;
                 X13 = y13 / D13;
-                // Входной темп со склада: желаемый, но ограничен наличием заготовок
-                double maxPossible = y0A / DeltaT;
-                X10 = Math.Min(DesiredInputRate, maxPossible);
+                // Темп со склада: уровень / задержка склада
+                double desired = y0A / Dstorage;
+                double maxPossible = y0A / DeltaT; // физическое ограничение
+                X10 = Math.Min(desired, maxPossible);
             }
             else
             {
@@ -188,8 +192,9 @@ namespace DynamicModelingLab3
             {
                 X21 = y21 / D21;
                 X22 = y22 / D22;
+                double desired = y0B / Dstorage;
                 double maxPossible = y0B / DeltaT;
-                X20 = Math.Min(DesiredInputRate, maxPossible);
+                X20 = Math.Min(desired, maxPossible);
             }
             else
             {
@@ -197,53 +202,60 @@ namespace DynamicModelingLab3
             }
         }
 
+        // Пополнение складов, остановка и возобновление линий
         private void ReplenishAndStop(double currentTime)
         {
-            double replThresholdA = ReplenishThreshold * Y0A0;
+            double replAmountA = ReplenishPercent * Y0A0; // 250
+            double replAmountB = ReplenishPercent * Y0B0;
+            double replThresholdA = ReplenishThreshold * Y0A0; // 100
             double replThresholdB = ReplenishThreshold * Y0B0;
-            double stopThrA = StopThreshold * Y0A0;
+            double stopThrA = StopThreshold * Y0A0; // 25
             double stopThrB = StopThreshold * Y0B0;
 
+            // Пополнение (всегда, если запасы ниже порога)
             if (y0A < replThresholdA)
             {
-                y0A += ReplenishAmount;
-                //Console.WriteLine($"  t={currentTime,5:F1}: Пополнение склада А +{ReplenishAmount} → {y0A,6:F0}");
+                y0A += replAmountA;
+                // Console.WriteLine($"  t={currentTime,5:F1}: Пополнение склада А +{replAmountA} → {y0A,6:F0}");
             }
             if (y0B < replThresholdB)
             {
-                y0B += ReplenishAmount;
-                //Console.WriteLine($"  t={currentTime,5:F1}: Пополнение склада В +{ReplenishAmount} → {y0B,6:F0}");
+                y0B += replAmountB;
+                // Console.WriteLine($"  t={currentTime,5:F1}: Пополнение склада В +{replAmountB} → {y0B,6:F0}");
             }
 
-            // Остановка линии, если запас упал до 5% или ниже
+            // Остановка / возобновление линии А
             if (!lineAStopped && y0A <= stopThrA)
             {
                 lineAStopped = true;
-                Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ А ОСТАНОВЛЕНА (запас {y0A,6:F0} ≤ {stopThrA})");
+                // Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ А ОСТАНОВЛЕНА");
             }
-            // Возобновление, если запас поднялся строго выше 5%
             else if (lineAStopped && y0A > stopThrA)
             {
                 lineAStopped = false;
-                Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ А ВОЗОБНОВЛЕНА (запас {y0A,6:F0} > {stopThrA})");
+                // Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ А ВОЗОБНОВЛЕНА");
+                // При возобновлении сбрасываем задержки на среднее значение
+                D11 = D12 = D13 = Davg;
             }
 
+            // Остановка / возобновление линии В
             if (!lineBStopped && y0B <= stopThrB)
             {
                 lineBStopped = true;
-                Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ В ОСТАНОВЛЕНА (запас {y0B,6:F0} ≤ {stopThrB})");
+                // Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ В ОСТАНОВЛЕНА");
             }
             else if (lineBStopped && y0B > stopThrB)
             {
                 lineBStopped = false;
-                Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ В ВОЗОБНОВЛЕНА (запас {y0B,6:F0} > {stopThrB})");
+                // Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ В ВОЗОБНОВЛЕНА");
+                D21 = D22 = Davg;
             }
         }
 
         // Обновление уровней (с использованием текущих темпов)
         private void UpdateLevels()
         {
-            // Склады: пополнение происходит в ReplenishAndStop, здесь только отток
+            // Склады: пополнение уже учтено в ReplenishAndStop, здесь только отток
             y0A = Math.Max(y0A + DeltaT * (0 - X10), 0);
             y0B = Math.Max(y0B + DeltaT * (0 - X20), 0);
 
@@ -307,14 +319,14 @@ namespace DynamicModelingLab3
         public void Run()
         {
             Console.WriteLine("\nПАРАМЕТРЫ МОДЕЛИ:");
-            Console.WriteLine($"  ПА={PA}, ПВ={PB}; Dmin={Dmin}, Dср={Davg}, Dmax={Dmax}; дельта-мю_доп={DeltaMuDop}; альфа = {AlphaBase}·дельта-мю");
-            Console.WriteLine($"  Пополнение: +{ReplenishAmount} при запасе < {ReplenishThreshold * 100}%; остановка при <= {StopThreshold * 100}%");
-            Console.WriteLine($"  Δt={DeltaT}, T={Tmax}, желаемый входной темп = {DesiredInputRate}\n");
+            Console.WriteLine($"  ПА={PA}, ПВ={PB}; Dmin={Dmin}, Dср={Davg}, Dmax={Dmax}; Δμдоп={DeltaMuDop}; α = {AlphaBase}·Δμ");
+            Console.WriteLine($"  Dstorage={Dstorage}; пополнение: +{ReplenishPercent * 100}% от начального (={ReplenishPercent * Y0A0}) при запасе < {ReplenishThreshold * 100}%;");
+            Console.WriteLine($"  остановка при ≤ {StopThreshold * 100}%, возобновление при превышении; сглаживание Dij = {Smoothing}");
+            Console.WriteLine($"  Δt={DeltaT}, T={Tmax}\n");
 
             SetInitialConditions();
             PrintHeader();
 
-            // Сохраняем начальное состояние
             SaveToHistory(0);
             PrintState(0);
 
@@ -322,22 +334,12 @@ namespace DynamicModelingLab3
             {
                 double t = step * DeltaT;
 
-                // 1. Решение о выпуске
-                AssemblyDecision();
+                AssemblyDecision();      // 1. Выпуск изделия
+                UpdateDelays();          // 2. Обновление задержек (формула (6) + сглаживание)
+                UpdateFlowRates();       // 3. Расчёт темпов
+                ReplenishAndStop(t);     // 4. Пополнение и проверка остановки/возобновления
+                UpdateLevels();          // 5. Обновление уровней
 
-                // 2. Расчёт новых задержек (по формуле (6) с учётом Δμ)
-                UpdateDelays();
-
-                // 3. Расчёт темпов
-                UpdateFlowRates();
-
-                // 4. Пополнение и остановка (до обновления уровней, чтобы избежать отрицательных запасов)
-                ReplenishAndStop(t);
-
-                // 5. Обновление уровней
-                UpdateLevels();
-
-                // Сохраняем результаты
                 SaveToHistory(t);
 
                 if (step % 5 == 0 || step == Tmax / DeltaT)
@@ -350,8 +352,10 @@ namespace DynamicModelingLab3
             Console.WriteLine($"  Выпущено изделий С: {Z:F0} шт.");
             Console.WriteLine($"  Остаток на складе А: {y0A:F2}, В: {y0B:F2}");
             Console.WriteLine($"  Остаток в сборке А: {yCA:F2}, В: {yCB:F2}");
-            if (lineAStopped) Console.WriteLine("  Линия А была остановлена.");
-            if (lineBStopped) Console.WriteLine("  Линия В была остановлена.");
+            if (lineAStopped) Console.WriteLine("  Линия А была остановлена (но могла возобновиться)");
+            if (lineBStopped) Console.WriteLine("  Линия В была остановлена (но могла возобновиться)");
+            Console.WriteLine($"  Средний уровень А в сборке: {yCAHistory.Average():F2}");
+            Console.WriteLine($"  Средний уровень В в сборке: {yCBHistory.Average():F2}");
 
             ExportToCsv();
         }
