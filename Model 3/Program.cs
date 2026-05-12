@@ -7,63 +7,60 @@ namespace DynamicModelingLab3
 {
     class Program
     {
-        static void Main(string[] args)
+        static void Main()
         {
-            Console.WriteLine("              ДИНАМИЧЕСКОЕ МОДЕЛИРОВАНИЕ ПРОИЗВОДСТВЕННОЙ СИСТЕМЫ");
-
+            Console.WriteLine("ДИНАМИЧЕСКОЕ МОДЕЛИРОВАНИЕ ПРОИЗВОДСТВЕННОЙ СИСТЕМЫ (ВАРИАНТ 1А)");
             var model = new ProductionModel();
             model.Run();
-
-            Console.WriteLine("Моделирование завершено. Нажмите любую клавишу для выхода...");
+            Console.WriteLine("Моделирование завершено. Нажмите любую клавишу...");
             Console.ReadKey();
         }
     }
 
-    /// <summary>
-    /// Класс модели производственной системы (трёхзвенная структура)
-    /// </summary>
     public class ProductionModel
     {
-        // ==================== ПАРАМЕТРЫ СИСТЕМЫ ====================
-        private const double PA = 200;      // Деталей А на изделие
-        private const double PB = 400;      // Деталей В на изделие
+        // ---------- Параметры из задания ----------
+        private const double PA = 200;          // деталей А на изделие
+        private const double PB = 400;          // деталей В на изделие
 
-        private const double Dmin = 2;      // Минимальная задержка
-        private const double Davg = 10;     // Средняя задержка
-        private const double Dmax = 18;     // Максимальная задержка
+        private const double Dmin = 2;           // мин. задержка (всех звеньев)
+        private const double Davg = 10;          // средняя задержка
+        private const double Dmax = 18;          // макс. задержка
 
-        private const double D1 = 5;        // Задержка в 1-м звене
-        private const double D3 = 5;        // Задержка в 3-м звене
+        private const double DeltaMuDop = 0.02;  // доп. отклонение μ
+        private const double AlphaBase = 50.0;   // α = 50 * Δμ
 
-        private const double DeltaMuDop = 0.02;   // Допустимая разница
-        private const double DCoefBase = 50;     // d = 50/|Δμ|
+        private const double ReplenishThreshold = 0.2;   // 20% от начального
+        private const double StopThreshold = 0.05;       // 5% от начального
+        private const double ReplenishAmount = 200;      // мгновенное пополнение
 
-        private const double Gamma = 0.2;         // 20% для пополнения
-        private const double Epsilon = 0.05;      // 5% для остановки
+        private const double DesiredInputRate = 10.0;    // желаемый темп со склада в линию
 
-        private const double Q_A = 200;            // Пополнение склада А
-        private const double Q_B = 200;            // Пополнение склада В
-
-        private const double DeltaT = 1;           // Шаг моделирования
-        private const double Tmax = 100;           // Время моделирования
+        private const double DeltaT = 1.0;               // шаг
+        private const double Tmax = 100.0;               // время моделирования
 
         private const double Y0A0 = 500;
         private const double Y0B0 = 500;
-        private const double YInit = 50;
-        private const double YCA0 = 25;
-        private const double YCB0 = 50;
-        private const double XInit = 10;
+        private const double YijInit = 50;               // начальные уровни в звеньях
+        private const double Yca0 = 25;
+        private const double Ycb0 = 50;
 
-        // ==================== ПЕРЕМЕННЫЕ МОДЕЛИ ====================
+        // ---------- Переменные модели ----------
+        // Склады
         private double y0A, y0B;
+        // Линия А (3 звена)
         private double y11, y12, y13;
-        private double y21, y22, y23;
+        private double D11, D12, D13;
+        private double X10, X11, X12, X13;
+        // Линия В (2 звена)
+        private double y21, y22;
+        private double D21, D22;
+        private double X20, X21, X22;
+        // Сборка
         private double yCA, yCB;
-        private double Z;
-        private double X11, X12, X13;
-        private double X21, X22, X23;
-        private double Xsb;
-        private double D12, D22;
+        private double Z;          // количество выпущенных изделий
+        private double Xsb;        // темп выпуска (0 или 1/Δt)
+
         private bool lineAStopped, lineBStopped;
 
         // История
@@ -71,14 +68,15 @@ namespace DynamicModelingLab3
         private List<double> y0AHistory, y0BHistory;
         private List<double> yCAHistory, yCBHistory;
         private List<double> ZHistory;
-        private List<double> D12History, D22History;
+        private List<double> D11History, D12History, D13History;
+        private List<double> D21History, D22History;
 
         public ProductionModel()
         {
-            InitializeHistory();
+            InitHistory();
         }
 
-        private void InitializeHistory()
+        private void InitHistory()
         {
             timeHistory = new List<double>();
             y0AHistory = new List<double>();
@@ -86,7 +84,10 @@ namespace DynamicModelingLab3
             yCAHistory = new List<double>();
             yCBHistory = new List<double>();
             ZHistory = new List<double>();
+            D11History = new List<double>();
             D12History = new List<double>();
+            D13History = new List<double>();
+            D21History = new List<double>();
             D22History = new List<double>();
         }
 
@@ -94,295 +95,265 @@ namespace DynamicModelingLab3
         {
             y0A = Y0A0;
             y0B = Y0B0;
-            y11 = YInit;
-            y12 = YInit;
-            y13 = YInit;
-            y21 = YInit;
-            y22 = YInit;
-            y23 = YInit;
-            yCA = YCA0;
-            yCB = YCB0;
+
+            y11 = y12 = y13 = YijInit;
+            y21 = y22 = YijInit;
+
+            D11 = D12 = D13 = Davg;
+            D21 = D22 = Davg;
+
+            yCA = Yca0;
+            yCB = Ycb0;
             Z = 0;
-            X11 = XInit;
-            X12 = XInit;
-            X13 = XInit;
-            X21 = XInit;
-            X22 = XInit;
-            X23 = XInit;
             Xsb = 0;
-            D12 = Davg;
-            D22 = Davg;
+
+            X10 = X20 = DesiredInputRate;      // начальный темп со склада
+            X11 = X12 = X13 = DesiredInputRate;
+            X21 = X22 = DesiredInputRate;
+
             lineAStopped = false;
             lineBStopped = false;
 
-            InitializeHistory();
+            InitHistory();
         }
 
-        private void CalculateMu(out double muA, out double muB)
+        // Вычисление коэффициентов μ
+        private (double muA, double muB) ComputeMu()
         {
-            muA = yCA / PA;
-            muB = yCB / PB;
+            return (yCA / PA, yCB / PB);
         }
 
-        private void CalculateAssemblyRate()
+        // Решение: выпуск изделия, если μA >= 1 и μB >= 1
+        private void AssemblyDecision()
         {
-            CalculateMu(out double muA, out double muB);
-            Xsb = (muA >= 1.0 && muB >= 1.0) ? 1.0 / DeltaT : 0;
+            var (muA, muB) = ComputeMu();
+            Xsb = (muA >= 1.0 && muB >= 1.0) ? 1.0 / DeltaT : 0.0;
         }
 
-        private void CalculateDelays(double prevD12, double prevD22)
+        // Расчёт задержек Dij по формуле (6) с α = AlphaBase * Δμ
+        private void UpdateDelays()
         {
-            CalculateMu(out double muA, out double muB);
+            var (muA, muB) = ComputeMu();
             double deltaMu = muA - muB;
 
-            if (lineAStopped && lineBStopped)
-                return;
+            // Если линии остановлены – не меняем задержки
+            if (lineAStopped && lineBStopped) return;
 
-            if (Math.Abs(deltaMu) > DeltaMuDop)
+            double alpha = AlphaBase * deltaMu;   // может быть отрицательным
+            // Ограничим α, чтобы изменения не выходили за пределы Dmin/Dmax слишком резко
+            alpha = Math.Clamp(alpha, -Dmax * 0.5, Dmax * 0.5);
+
+            // Для линии А (3 звена)
+            if (!lineAStopped)
             {
-                double dCoef = DCoefBase / Math.Abs(deltaMu);
-                dCoef = Math.Min(dCoef, 10.0);
-                dCoef = Math.Max(dCoef, 0.1);
-                double adjustment = dCoef * Dmax;
-
-                if (deltaMu > 0)
-                {
-                    if (!lineAStopped)
-                    {
-                        D12 = Dmin + Davg * (y12 / prevD12) + adjustment;
-                        D12 = Math.Min(D12, Dmax);
-                        D12 = Math.Max(D12, Dmin);
-                    }
-                    if (!lineBStopped)
-                    {
-                        D22 = Dmin + Davg * (y22 / prevD22) - adjustment;
-                        D22 = Math.Min(D22, Dmax);
-                        D22 = Math.Max(D22, Dmin);
-                    }
-                }
-                else
-                {
-                    if (!lineAStopped)
-                    {
-                        D12 = Dmin + Davg * (y12 / prevD12) - adjustment;
-                        D12 = Math.Min(D12, Dmax);
-                        D12 = Math.Max(D12, Dmin);
-                    }
-                    if (!lineBStopped)
-                    {
-                        D22 = Dmin + Davg * (y22 / prevD22) + adjustment;
-                        D22 = Math.Min(D22, Dmax);
-                        D22 = Math.Max(D22, Dmin);
-                    }
-                }
+                D11 = Dmin + Davg * (y11 / D11) + alpha;
+                D12 = Dmin + Davg * (y12 / D12) + alpha;
+                D13 = Dmin + Davg * (y13 / D13) + alpha;
+                // Ограничение и защита от деления на ноль
+                D11 = Math.Clamp(D11, Dmin, Dmax);
+                D12 = Math.Clamp(D12, Dmin, Dmax);
+                D13 = Math.Clamp(D13, Dmin, Dmax);
             }
-            else
+
+            // Для линии В (2 звена) – знак α противоположный (ускорение/замедление)
+            if (!lineBStopped)
             {
-                if (!lineAStopped)
-                {
-                    D12 = D12 + 0.1 * (Davg - D12);
-                    D12 = Math.Min(D12, Dmax);
-                    D12 = Math.Max(D12, Dmin);
-                }
-                if (!lineBStopped)
-                {
-                    D22 = D22 + 0.1 * (Davg - D22);
-                    D22 = Math.Min(D22, Dmax);
-                    D22 = Math.Max(D22, Dmin);
-                }
+                // При deltaMu>0 (А переполнена) – линию В нужно ускорить => уменьшить D (знак минус)
+                double alphaB = (deltaMu > 0) ? -alpha : alpha;
+                D21 = Dmin + Davg * (y21 / D21) + alphaB;
+                D22 = Dmin + Davg * (y22 / D22) + alphaB;
+                D21 = Math.Clamp(D21, Dmin, Dmax);
+                D22 = Math.Clamp(D22, Dmin, Dmax);
             }
         }
 
-        private void CalculateFlowRates()
+        // Расчёт темпов Xij = yij / Dij
+        private void UpdateFlowRates()
         {
             if (!lineAStopped)
             {
-                X11 = y11 / D1;
+                X11 = y11 / D11;
                 X12 = y12 / D12;
-                X13 = y13 / D3;
+                X13 = y13 / D13;
+                // Входной темп со склада: желаемый, но ограничен наличием заготовок
+                double maxPossible = y0A / DeltaT;
+                X10 = Math.Min(DesiredInputRate, maxPossible);
             }
             else
             {
-                X11 = 0; X12 = 0; X13 = 0;
+                X10 = X11 = X12 = X13 = 0;
             }
 
             if (!lineBStopped)
             {
-                X21 = y21 / D1;
+                X21 = y21 / D21;
                 X22 = y22 / D22;
-                X23 = y23 / D3;
+                double maxPossible = y0B / DeltaT;
+                X20 = Math.Min(DesiredInputRate, maxPossible);
             }
             else
             {
-                X21 = 0; X22 = 0; X23 = 0;
+                X20 = X21 = X22 = 0;
             }
         }
 
-        private void CheckReplenishmentAndStop(double currentTime)
+        private void ReplenishAndStop(double currentTime)
         {
-            double replenishThreshold = Gamma * Y0A0;
-            double stopThreshold = Epsilon * Y0A0;
+            double replThresholdA = ReplenishThreshold * Y0A0;
+            double replThresholdB = ReplenishThreshold * Y0B0;
+            double stopThrA = StopThreshold * Y0A0;
+            double stopThrB = StopThreshold * Y0B0;
 
-            if (y0A < replenishThreshold && !lineAStopped)
+            if (y0A < replThresholdA)
             {
-                y0A += Q_A;
-                Console.WriteLine($"  СОБЫТИЕ t={currentTime:F1} | Пополнение склада А +{Q_A} | Стало: {y0A:F0}");
+                y0A += ReplenishAmount;
+                //Console.WriteLine($"  t={currentTime,5:F1}: Пополнение склада А +{ReplenishAmount} → {y0A,6:F0}");
             }
-            if (y0B < replenishThreshold && !lineBStopped)
+            if (y0B < replThresholdB)
             {
-                y0B += Q_B;
-                Console.WriteLine($"  СОБЫТИЕ t={currentTime:F1} | Пополнение склада В +{Q_B} | Стало: {y0B:F0}");
+                y0B += ReplenishAmount;
+                //Console.WriteLine($"  t={currentTime,5:F1}: Пополнение склада В +{ReplenishAmount} → {y0B,6:F0}");
             }
 
-            if (!lineAStopped && y0A <= stopThreshold)
+            // Остановка линии, если запас упал до 5% или ниже
+            if (!lineAStopped && y0A <= stopThrA)
             {
                 lineAStopped = true;
-                Console.WriteLine($"  СОБЫТИЕ t={currentTime:F1} | ЛИНИЯ А ОСТАНОВЛЕНА | Запас: {y0A:F0} ≤ {stopThreshold}");
+                Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ А ОСТАНОВЛЕНА (запас {y0A,6:F0} ≤ {stopThrA})");
             }
-            if (!lineBStopped && y0B <= stopThreshold)
+            // Возобновление, если запас поднялся строго выше 5%
+            else if (lineAStopped && y0A > stopThrA)
+            {
+                lineAStopped = false;
+                Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ А ВОЗОБНОВЛЕНА (запас {y0A,6:F0} > {stopThrA})");
+            }
+
+            if (!lineBStopped && y0B <= stopThrB)
             {
                 lineBStopped = true;
-                Console.WriteLine($"  СОБЫТИЕ t={currentTime:F1} | ЛИНИЯ В ОСТАНОВЛЕНА | Запас: {y0B:F0} ≤ {stopThreshold}");
+                Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ В ОСТАНОВЛЕНА (запас {y0B,6:F0} ≤ {stopThrB})");
+            }
+            else if (lineBStopped && y0B > stopThrB)
+            {
+                lineBStopped = false;
+                Console.WriteLine($"  t={currentTime,5:F1}: ЛИНИЯ В ВОЗОБНОВЛЕНА (запас {y0B,6:F0} > {stopThrB})");
             }
         }
 
+        // Обновление уровней (с использованием текущих темпов)
         private void UpdateLevels()
         {
-            double cur_y0A = y0A, cur_y0B = y0B;
-            double cur_y11 = y11, cur_y12 = y12, cur_y13 = y13;
-            double cur_y21 = y21, cur_y22 = y22, cur_y23 = y23;
-            double cur_yCA = yCA, cur_yCB = yCB;
-            double cur_Z = Z;
-            double cur_X11 = X11, cur_X12 = X12, cur_X13 = X13;
-            double cur_X21 = X21, cur_X22 = X22, cur_X23 = X23;
-            double cur_Xsb = Xsb;
+            // Склады: пополнение происходит в ReplenishAndStop, здесь только отток
+            y0A = Math.Max(y0A + DeltaT * (0 - X10), 0);
+            y0B = Math.Max(y0B + DeltaT * (0 - X20), 0);
 
-            y0A = Math.Max(cur_y0A + DeltaT * (0 - cur_X11), 0);
-            y0B = Math.Max(cur_y0B + DeltaT * (0 - cur_X21), 0);
+            // Линия А
+            y11 = Math.Max(y11 + DeltaT * (X10 - X11), 0);
+            y12 = Math.Max(y12 + DeltaT * (X11 - X12), 0);
+            y13 = Math.Max(y13 + DeltaT * (X12 - X13), 0);
 
-            y11 = Math.Max(cur_y11 + DeltaT * (cur_X11 - cur_X11), 0);
-            y12 = Math.Max(cur_y12 + DeltaT * (cur_X11 - cur_X12), 0);
-            y13 = Math.Max(cur_y13 + DeltaT * (cur_X12 - cur_X13), 0);
+            // Линия В
+            y21 = Math.Max(y21 + DeltaT * (X20 - X21), 0);
+            y22 = Math.Max(y22 + DeltaT * (X21 - X22), 0);
 
-            y21 = Math.Max(cur_y21 + DeltaT * (cur_X21 - cur_X21), 0);
-            y22 = Math.Max(cur_y22 + DeltaT * (cur_X21 - cur_X22), 0);
-            y23 = Math.Max(cur_y23 + DeltaT * (cur_X22 - cur_X23), 0);
-
-            yCA = Math.Max(cur_yCA + DeltaT * (cur_X13 - PA * cur_Xsb), 0);
-            yCB = Math.Max(cur_yCB + DeltaT * (cur_X23 - PB * cur_Xsb), 0);
-            Z = cur_Z + DeltaT * cur_Xsb;
+            // Сборка
+            yCA = Math.Max(yCA + DeltaT * (X13 - PA * Xsb), 0);
+            yCB = Math.Max(yCB + DeltaT * (X22 - PB * Xsb), 0);
+            Z += DeltaT * Xsb;   // количество выпущенных изделий
         }
 
-        private void SaveToHistory(double time)
+        // Сохранение данных в историю
+        private void SaveToHistory(double t)
         {
-            timeHistory.Add(time);
+            timeHistory.Add(t);
             y0AHistory.Add(y0A);
             y0BHistory.Add(y0B);
             yCAHistory.Add(yCA);
             yCBHistory.Add(yCB);
             ZHistory.Add(Z);
+            D11History.Add(D11);
             D12History.Add(D12);
+            D13History.Add(D13);
+            D21History.Add(D21);
             D22History.Add(D22);
-        }
-
-        private void PrintState(double time)
-        {
-            Console.WriteLine($"│ {time,6:F1} │ {y0A,9:F1} │ {y0B,9:F1} │ {yCA,9:F1} │ {yCB,9:F1} │ {Z,6:F0} │ {D12,8:F2} │ {D22,8:F2} │");
         }
 
         private void PrintHeader()
         {
-            Console.WriteLine("┌────────┬───────────┬───────────┬───────────┬───────────┬────────┬──────────┬──────────┐");
-            Console.WriteLine("│   t    │    y0A    │    y0B    │    yCA    │    yCB    │   Z    │   D12    │   D22    │");
-            Console.WriteLine("├────────┼───────────┼───────────┼───────────┼───────────┼────────┼──────────┼──────────┤");
+            Console.WriteLine("┌───────┬──────────┬──────────┬──────────┬──────────┬───────┬──────────┬──────────┬──────────┬──────────┬──────────┐");
+            Console.WriteLine("│   t   │   y0A    │   y0B    │   yCA    │   yCB    │   Z   │   D11    │   D12    │   D13    │   D21    │   D22    │");
+            Console.WriteLine("├───────┼──────────┼──────────┼──────────┼──────────┼───────┼──────────┼──────────┼──────────┼──────────┼──────────┤");
+        }
+
+        private void PrintState(double t)
+        {
+            Console.WriteLine($"│ {t,5:F1} │ {y0A,8:F1} │ {y0B,8:F1} │ {yCA,8:F1} │ {yCB,8:F1} │ {Z,5:F0} │ {D11,8:F2} │ {D12,8:F2} │ {D13,8:F2} │ {D21,8:F2} │ {D22,8:F2} │");
         }
 
         private void PrintFooter()
         {
-            Console.WriteLine("└────────┴───────────┴───────────┴───────────┴───────────┴────────┴──────────┴──────────┘");
+            Console.WriteLine("└───────┴──────────┴──────────┴──────────┴──────────┴───────┴──────────┴──────────┴──────────┴──────────┴──────────┘");
         }
 
-        private void ExportResultsToFile()
+        private void ExportToCsv()
         {
-            string filePath = "model_results.csv";
-            using (StreamWriter writer = new StreamWriter(filePath))
-            {
-                writer.WriteLine("t;y0A;y0B;yCA;yCB;Z;D12;D22");
-                for (int i = 0; i < timeHistory.Count; i++)
-                {
-                    writer.WriteLine($"{timeHistory[i]:F1};{y0AHistory[i]:F2};{y0BHistory[i]:F2};" +
-                                     $"{yCAHistory[i]:F2};{yCBHistory[i]:F2};{ZHistory[i]:F2};" +
-                                     $"{D12History[i]:F2};{D22History[i]:F2}");
-                }
-            }
+            using var sw = new StreamWriter("dynamic_model_results.csv");
+            sw.WriteLine("t;y0A;y0B;yCA;yCB;Z;D11;D12;D13;D21;D22");
+            for (int i = 0; i < timeHistory.Count; i++)
+                sw.WriteLine($"{timeHistory[i]};{y0AHistory[i]};{y0BHistory[i]};{yCAHistory[i]};{yCBHistory[i]};{ZHistory[i]};{D11History[i]};{D12History[i]};{D13History[i]};{D21History[i]};{D22History[i]}");
+            Console.WriteLine("Результаты сохранены в dynamic_model_results.csv");
         }
 
         public void Run()
         {
-            Console.WriteLine("                        ПАРАМЕТРЫ МОДЕЛИ");
-            Console.WriteLine("");
-            Console.WriteLine($"  • Комплектность:           ПА = {PA}, ПВ = {PB}");
-            Console.WriteLine($"  • Задержки 2-го звена:     Dmin = {Dmin}, Dср = {Davg}, Dmax = {Dmax}");
-            Console.WriteLine($"  • Задержки 1 и 3 звена:    D1 = {D1}, D3 = {D3}");
-            Console.WriteLine($"  • Допустимая разница:      dMдоп = {DeltaMuDop}");
-            Console.WriteLine($"  • Коэффициент управления:  d = {DCoefBase}/|dM|");
-            Console.WriteLine($"  • Шаг и время:             Δt = {DeltaT}, T = {Tmax}");
-            Console.WriteLine($"  • Пополнение:              Q_A = {Q_A}, Q_B = {Q_B}");
-            Console.WriteLine($"  • Порог пополнения:        {Gamma * Y0A0} (20%)");
-            Console.WriteLine($"  • Порог остановки:         {Epsilon * Y0A0} (5%)");
-            Console.WriteLine($"  • Количество шагов:        {Tmax / DeltaT}");
-
-            PrintHeader();
+            Console.WriteLine("\nПАРАМЕТРЫ МОДЕЛИ:");
+            Console.WriteLine($"  ПА={PA}, ПВ={PB}; Dmin={Dmin}, Dср={Davg}, Dmax={Dmax}; дельта-мю_доп={DeltaMuDop}; альфа = {AlphaBase}·дельта-мю");
+            Console.WriteLine($"  Пополнение: +{ReplenishAmount} при запасе < {ReplenishThreshold * 100}%; остановка при <= {StopThreshold * 100}%");
+            Console.WriteLine($"  Δt={DeltaT}, T={Tmax}, желаемый входной темп = {DesiredInputRate}\n");
 
             SetInitialConditions();
+            PrintHeader();
+
+            // Сохраняем начальное состояние
             SaveToHistory(0);
             PrintState(0);
 
-            double prevD12 = D12;
-            double prevD22 = D22;
-
             for (int step = 1; step <= Tmax / DeltaT; step++)
             {
-                double currentTime = step * DeltaT;
-                prevD12 = D12;
-                prevD22 = D22;
+                double t = step * DeltaT;
 
-                CalculateAssemblyRate();
-                CalculateDelays(prevD12, prevD22);
-                CalculateFlowRates();
-                CheckReplenishmentAndStop(currentTime);
+                // 1. Решение о выпуске
+                AssemblyDecision();
+
+                // 2. Расчёт новых задержек (по формуле (6) с учётом Δμ)
+                UpdateDelays();
+
+                // 3. Расчёт темпов
+                UpdateFlowRates();
+
+                // 4. Пополнение и остановка (до обновления уровней, чтобы избежать отрицательных запасов)
+                ReplenishAndStop(t);
+
+                // 5. Обновление уровней
                 UpdateLevels();
-                SaveToHistory(currentTime);
 
-                if (step % 5 == 0 || step == (int)(Tmax / DeltaT))
-                {
-                    PrintState(currentTime);
-                }
+                // Сохраняем результаты
+                SaveToHistory(t);
+
+                if (step % 5 == 0 || step == Tmax / DeltaT)
+                    PrintState(t);
             }
 
             PrintFooter();
 
-            Console.WriteLine("\n══════════════════════════════════════════════════════════════════════════════════════");
-            Console.WriteLine("                         ИТОГОВЫЕ РЕЗУЛЬТАТЫ");
-            Console.WriteLine("══════════════════════════════════════════════════════════════════════════════════════");
-            Console.WriteLine($"  • Выпущено готовых изделий С:     {Z:F0} шт.");
-            Console.WriteLine($"  • Конечный уровень склада А:      {y0A:F2} ед.");
-            Console.WriteLine($"  • Конечный уровень склада В:      {y0B:F2} ед.");
-            Console.WriteLine($"  • Конечный уровень А в сборке:    {yCA:F2} ед.");
-            Console.WriteLine($"  • Конечный уровень В в сборке:    {yCB:F2} ед.");
-            Console.WriteLine($"  • Конечная задержка D12:          {D12:F2}");
-            Console.WriteLine($"  • Конечная задержка D22:          {D22:F2}");
+            Console.WriteLine("\nИТОГОВЫЕ РЕЗУЛЬТАТЫ:");
+            Console.WriteLine($"  Выпущено изделий С: {Z:F0} шт.");
+            Console.WriteLine($"  Остаток на складе А: {y0A:F2}, В: {y0B:F2}");
+            Console.WriteLine($"  Остаток в сборке А: {yCA:F2}, В: {yCB:F2}");
+            if (lineAStopped) Console.WriteLine("  Линия А была остановлена.");
+            if (lineBStopped) Console.WriteLine("  Линия В была остановлена.");
 
-            if (lineAStopped)
-                Console.WriteLine($"\n   ЛИНИЯ А БЫЛА ОСТАНОВЛЕНА (запас упал до {Epsilon * Y0A0} ед.)");
-            if (lineBStopped)
-                Console.WriteLine($"    ЛИНИЯ В БЫЛА ОСТАНОВЛЕНА (запас упал до {Epsilon * Y0A0} ед.)");
-
-            Console.WriteLine($"\n  • Средний уровень А в сборке:    {yCAHistory.Average():F2} ед.");
-            Console.WriteLine($"  • Средний уровень В в сборке:    {yCBHistory.Average():F2} ед.");
-            Console.WriteLine("══════════════════════════════════════════════════════════════════════════════════════");
-
-            ExportResultsToFile();
+            ExportToCsv();
         }
     }
 }
