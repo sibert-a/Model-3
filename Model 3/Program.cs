@@ -26,7 +26,8 @@ namespace DynamicModelingLab3
         private const double Dmin = 2;           // мин. задержка (всех звеньев)
         private const double Davg = 10;          // средняя задержка
         private const double Dmax = 18;          // макс. задержка
-        private const double Dstorage = 10;      // задержка склада (аналог Dij)
+        private const double DstorageA = 10;      // задержка склада (аналог Dij)
+        private const double DstorageB = 10;      
 
         private const double DeltaMuDop = 0.02;  // доп. отклонение μ
         private const double AlphaBase = 50.0;   // α = 50 * Δμ
@@ -72,6 +73,15 @@ namespace DynamicModelingLab3
         private List<double> D11History, D12History, D13History;
         private List<double> D21History, D22History;
 
+        // новые метрики
+        private List<double> y11History, y12History, y13History;
+        private List<double> y21History, y22History;
+        private List<double> X10History, X11History, X12History, X13History;
+        private List<double> X20History, X21History, X22History;
+        private List<double> XsbHistory;
+        private List<double> muAHistory, muBHistory, deltaMuHistory, alphaHistory;
+        private List<int> lineAStoppedHistory, lineBStoppedHistory;
+
         public ProductionModel()
         {
             InitHistory();
@@ -90,6 +100,30 @@ namespace DynamicModelingLab3
             D13History = new List<double>();
             D21History = new List<double>();
             D22History = new List<double>();
+
+            // Новые:
+            y11History = new List<double>();
+            y12History = new List<double>();
+            y13History = new List<double>();
+            y21History = new List<double>();
+            y22History = new List<double>();
+
+            X10History = new List<double>();
+            X11History = new List<double>();
+            X12History = new List<double>();
+            X13History = new List<double>();
+            X20History = new List<double>();
+            X21History = new List<double>();
+            X22History = new List<double>();
+            XsbHistory = new List<double>();
+
+            muAHistory = new List<double>();
+            muBHistory = new List<double>();
+            deltaMuHistory = new List<double>();
+            alphaHistory = new List<double>();
+
+            lineAStoppedHistory = new List<int>();
+            lineBStoppedHistory = new List<int>();
         }
 
         private void SetInitialConditions()
@@ -109,8 +143,8 @@ namespace DynamicModelingLab3
             Xsb = 0;
 
             // Начальные темпы (пересчитаются на первом шаге через UpdateFlowRates)
-            X10 = y0A / Dstorage;
-            X20 = y0B / Dstorage;
+            X10 = y0A / DstorageA;
+            X20 = y0B / DstorageB;
             X11 = y11 / D11;
             X12 = y12 / D12;
             X13 = y13 / D13;
@@ -179,7 +213,7 @@ namespace DynamicModelingLab3
                 X12 = y12 / D12;
                 X13 = y13 / D13;
                 // Темп со склада: уровень / задержка склада
-                double desired = y0A / Dstorage;
+                double desired = y0A / DstorageA;
                 double maxPossible = y0A / DeltaT; // физическое ограничение
                 X10 = Math.Min(desired, maxPossible);
             }
@@ -192,7 +226,7 @@ namespace DynamicModelingLab3
             {
                 X21 = y21 / D21;
                 X22 = y22 / D22;
-                double desired = y0B / Dstorage;
+                double desired = y0B / DstorageB;
                 double maxPossible = y0B / DeltaT;
                 X20 = Math.Min(desired, maxPossible);
             }
@@ -288,6 +322,33 @@ namespace DynamicModelingLab3
             D13History.Add(D13);
             D21History.Add(D21);
             D22History.Add(D22);
+
+            // Новые:
+            y11History.Add(y11);
+            y12History.Add(y12);
+            y13History.Add(y13);
+            y21History.Add(y21);
+            y22History.Add(y22);
+
+            X10History.Add(X10);
+            X11History.Add(X11);
+            X12History.Add(X12);
+            X13History.Add(X13);
+            X20History.Add(X20);
+            X21History.Add(X21);
+            X22History.Add(X22);
+            XsbHistory.Add(Xsb);
+
+            var (muA, muB) = ComputeMu();
+            double deltaMu = muA - muB;
+            double alpha = AlphaBase * deltaMu;
+            muAHistory.Add(muA);
+            muBHistory.Add(muB);
+            deltaMuHistory.Add(deltaMu);
+            alphaHistory.Add(alpha);
+
+            lineAStoppedHistory.Add(lineAStopped ? 1 : 0);
+            lineBStoppedHistory.Add(lineBStopped ? 1 : 0);
         }
 
         private void PrintHeader()
@@ -310,17 +371,32 @@ namespace DynamicModelingLab3
         private void ExportToCsv()
         {
             using var sw = new StreamWriter("dynamic_model_results.csv");
-            sw.WriteLine("t;y0A;y0B;yCA;yCB;Z;D11;D12;D13;D21;D22");
+            // Заголовок (все метрики)
+            sw.WriteLine("t;y0A;y0B;y11;y12;y13;y21;y22;yCA;yCB;Z;" +
+                         "D11;D12;D13;D21;D22;" +
+                         "X10;X11;X12;X13;X20;X21;X22;Xsb;" +
+                         "muA;muB;deltaMu;alpha;" +
+                         "lineAStopped;lineBStopped");
+
             for (int i = 0; i < timeHistory.Count; i++)
-                sw.WriteLine($"{timeHistory[i]};{y0AHistory[i]};{y0BHistory[i]};{yCAHistory[i]};{yCBHistory[i]};{ZHistory[i]};{D11History[i]};{D12History[i]};{D13History[i]};{D21History[i]};{D22History[i]}");
-            Console.WriteLine("Результаты сохранены в dynamic_model_results.csv");
+            {
+                sw.WriteLine($"{timeHistory[i]};" +
+                             $"{y0AHistory[i]};{y0BHistory[i]};" +
+                             $"{y11History[i]};{y12History[i]};{y13History[i]};{y21History[i]};{y22History[i]};" +
+                             $"{yCAHistory[i]};{yCBHistory[i]};{ZHistory[i]};" +
+                             $"{D11History[i]};{D12History[i]};{D13History[i]};{D21History[i]};{D22History[i]};" +
+                             $"{X10History[i]};{X11History[i]};{X12History[i]};{X13History[i]};{X20History[i]};{X21History[i]};{X22History[i]};{XsbHistory[i]};" +
+                             $"{muAHistory[i]};{muBHistory[i]};{deltaMuHistory[i]};{alphaHistory[i]};" +
+                             $"{lineAStoppedHistory[i]};{lineBStoppedHistory[i]}");
+            }
+            Console.WriteLine("Результаты (все метрики) сохранены в dynamic_model_results.csv");
         }
 
         public void Run()
         {
             Console.WriteLine("\nПАРАМЕТРЫ МОДЕЛИ:");
             Console.WriteLine($"  ПА={PA}, ПВ={PB}; Dmin={Dmin}, Dср={Davg}, Dmax={Dmax}; Δμдоп={DeltaMuDop}; α = {AlphaBase}·Δμ");
-            Console.WriteLine($"  Dstorage={Dstorage}; пополнение: +{ReplenishPercent * 100}% от начального (={ReplenishPercent * Y0A0}) при запасе < {ReplenishThreshold * 100}%;");
+            Console.WriteLine($"  DstorageA={DstorageA}; DstorageB={DstorageB}; пополнение: +{ReplenishPercent * 100}% от начального (={ReplenishPercent * Y0A0}) при запасе < {ReplenishThreshold * 100}%;");
             Console.WriteLine($"  остановка при ≤ {StopThreshold * 100}%, возобновление при превышении; сглаживание Dij = {Smoothing}");
             Console.WriteLine($"  Δt={DeltaT}, T={Tmax}\n");
 
